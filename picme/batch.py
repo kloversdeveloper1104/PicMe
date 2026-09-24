@@ -82,7 +82,9 @@ def run_batch(
     use_ai: bool = True,
     progress: Callable[[int, int, BatchResult], None] | None = None,
     mp_context=None,
+    per_file: dict[Path, RetouchSettings] | None = None,
 ) -> list[BatchResult]:
+    """files を settings で一括補正する。per_file に指定した画像はその設定を優先する。"""
     out_dir = Path(out_dir)
     jobs = []
     for src in files:
@@ -94,14 +96,16 @@ def run_batch(
         jobs.append((src, dst))
 
     workers = workers or max(1, min(len(jobs), (os.cpu_count() or 2) // 2))
-    settings_dict = settings.to_dict()
+    per_file = per_file or {}
+    base_dict = settings.to_dict()
+    job_settings = {src: (per_file[src].to_dict() if src in per_file else base_dict) for src, _ in jobs}
     results: list[BatchResult] = []
     total = len(jobs)
 
     if workers <= 1:
         _init_worker(use_ai)
         for src, dst in jobs:
-            r = _process_one(src, dst, settings_dict, quality)
+            r = _process_one(src, dst, job_settings[src], quality)
             results.append(r)
             if progress:
                 progress(len(results), total, r)
@@ -110,7 +114,7 @@ def run_batch(
     with ProcessPoolExecutor(
         max_workers=workers, mp_context=mp_context, initializer=_init_worker, initargs=(use_ai,)
     ) as ex:
-        futures = [ex.submit(_process_one, s, d, settings_dict, quality) for s, d in jobs]
+        futures = [ex.submit(_process_one, s, d, job_settings[s], quality) for s, d in jobs]
         for fut in as_completed(futures):
             r = fut.result()
             results.append(r)

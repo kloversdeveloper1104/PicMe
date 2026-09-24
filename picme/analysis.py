@@ -245,6 +245,7 @@ class FaceAnalyzer:
                             # 既に見つかっている顔と重なるものは捨てる
                             if all(np.linalg.norm(cand.center - f.center) > 0.4 * max(cand.scale, f.scale) for f in faces):
                                 faces.append(cand)
+        faces.sort(key=lambda f: (float(f.center[0]), float(f.center[1])))  # 左から順に番号付け
         return faces
 
     @staticmethod

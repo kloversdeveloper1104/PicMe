@@ -37,3 +37,20 @@ def test_cli_overrides():
     assert s.color.auto_tone is True
     with pytest.raises(SystemExit):
         _apply_overrides(s, ["skin.nope=1"])
+
+
+def test_history_undo_redo():
+    from picme.gui.history import History
+
+    h = History(limit=3)
+    h.reset({"v": 0})
+    assert not h.commit({"v": 0})  # 変化なしは積まない
+    for v in (1, 2, 3, 4):
+        assert h.commit({"v": v})
+    assert h.undo() == {"v": 3}
+    assert h.undo() == {"v": 2}
+    assert h.redo() == {"v": 3}
+    h.commit({"v": 9})
+    assert not h.can_redo
+    assert h.undo() == {"v": 3} and h.undo() == {"v": 2} and h.undo() == {"v": 1}
+    assert h.undo() is None  # limit=3 を超えた古い履歴は捨てられている
