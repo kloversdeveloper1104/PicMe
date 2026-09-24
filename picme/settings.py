@@ -152,7 +152,7 @@ PRESETS: dict[str, RetouchSettings] = {
         face={"slim": 20, "eye_enlarge": 10, "eye_brighten": 35, "dark_circles": 55, "teeth_whiten": 45, "lip_color": 15, "hair_shine": 20},
     ),
     "wedding": _preset(
-        color={"exposure": 8, "contrast": -5, "highlights": -25, "shadows": 25, "temperature": 8, "vibrance": 10, "sharpen": 10},
+        color={"exposure": 8, "contrast": -5, "highlights": -25, "shadows": 15, "temperature": 8, "vibrance": 10, "sharpen": 10},
         skin={"smooth": 65, "texture": 40, "blemish": 90, "even_tone": 55, "brighten": 25, "wrinkles": 45},
         face={"slim": 25, "eye_enlarge": 12, "eye_brighten": 40, "dark_circles": 65, "teeth_whiten": 55, "lip_color": 20, "hair_shine": 30},
         background={"blur": 25},

@@ -1,0 +1,64 @@
+name: Build apps
+
+# v で始まるタグ (例: v0.2.0) を push するとビルドしてリリースに添付する。
+# Actions 画面から手動実行した場合は成果物 (Artifacts) としてダウンロードできる。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: PicMe-windows
+          - os: macos-latest
+            name: PicMe-macos
+          - os: ubuntu-latest
+            name: PicMe-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: System libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgles2 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: Install
+        run: pip install -e ".[all]" pyinstaller
+      - name: Build
+        run: python packaging/build.py
+      - name: Smoke test (CLI)
+        shell: bash
+        env:
+          PICME_OFFLINE: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then BIN=dist/PicMe.app/Contents/MacOS/PicMe; else BIN=dist/PicMe/PicMe; fi
+          "$BIN" --cli --list-presets
+      - name: Archive
+        shell: bash
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then 7z a ../${{ matrix.name }}.zip PicMe;
+          elif [ "$RUNNER_OS" = "macOS" ]; then ditto -c -k --keepParent PicMe.app ../${{ matrix.name }}.zip;
+          else tar czf ../${{ matrix.name }}.tar.gz PicMe; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.*
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.name }}.*

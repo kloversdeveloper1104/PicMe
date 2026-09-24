@@ -105,14 +105,35 @@ def local_tone(img: np.ndarray, s: ColorSettings) -> np.ndarray:
     if not (s.highlights or s.shadows):
         return img
     lum = clip01(luminance(img))
-    # 局所的な明るさを基準にするとハロが出にくい自然なトーン補正になる
-    base = blur(lum, max(img.shape[:2]) * 0.01)
+    # 局所的な明るさを基準にした「なめらかな倍率マップ」をかける。
+    # 画素ごとの明るさから倍率を決めると、暗部のノイズまで増幅されてざらつくため。
+    base = np.maximum(blur(lum, max(img.shape[:2]) * 0.01), np.float32(1e-3))
     w_sh = (1.0 - smoothstep(0.0, 0.55, base)) ** 2
     w_hl = smoothstep(0.45, 1.0, base) ** 2
     delta = np.float32(0.35 * s.shadows / 100.0) * w_sh + np.float32(0.35 * s.highlights / 100.0) * w_hl
-    new = clip01(lum + delta * np.where(delta > 0, 1.0 - lum, lum))
-    ratio = np.minimum(new / np.maximum(lum, np.float32(1e-3)), np.float32(4.0))
-    img *= ratio[..., None]
+    new = clip01(base + delta * np.where(delta > 0, 1.0 - base, base))
+    gain = np.clip(new / base, np.float32(0.25), np.float32(2.5))
+    img *= gain[..., None]
+    return denoise_lifted(img, gain)
+
+
+def denoise_lifted(img: np.ndarray, gain: np.ndarray) -> np.ndarray:
+    """持ち上げた暗部 (gain > 1) で目立つノイズ、特に色ノイズを抑える。"""
+    w = clip01((gain - np.float32(1.05)) * np.float32(1.5))
+    roi = None
+    if float(w.max()) < 0.02:
+        return img
+    from .ops import mask_roi
+
+    roi = mask_roi(w, 4, 0.02)
+    sub, wr = img[roi], w[roi]
+    gray = luminance(sub)
+    chroma = sub - gray[..., None]
+    sigma = max(1.5, max(img.shape[:2]) / 1200.0)
+    chroma_s = cv2.GaussianBlur(chroma, (0, 0), sigma * 1.5)
+    gray_s = cv2.GaussianBlur(gray, (0, 0), sigma * 0.6)
+    out = (gray + (gray_s - gray) * (wr * 0.6))[..., None] + chroma + (chroma_s - chroma) * wr[..., None]
+    img[roi] = out
     return img
 
 

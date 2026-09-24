@@ -27,8 +27,13 @@ def _apply_overrides(settings: RetouchSettings, overrides: list[str]) -> Retouch
             raise SystemExit(f"--set の形式が不正です (例: skin.smooth=60): {item}")
         if group not in data or name not in data[group]:
             raise SystemExit(f"不明な設定項目です: {key}")
-        v = value.strip().lower()
-        data[group][name] = v in {"1", "true", "on", "yes"} if isinstance(data[group][name], bool) else float(v)
+        default, v = data[group][name], value.strip()
+        if isinstance(default, bool):
+            data[group][name] = v.lower() in {"1", "true", "on", "yes"}
+        elif isinstance(default, str):
+            data[group][name] = v
+        else:
+            data[group][name] = float(v)
     return RetouchSettings.from_dict(data)
 
 

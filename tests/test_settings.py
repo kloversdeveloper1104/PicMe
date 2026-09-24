@@ -32,8 +32,9 @@ def test_get_preset_unknown():
 
 
 def test_cli_overrides():
-    s = _apply_overrides(get_preset("none"), ["skin.smooth=60", "color.auto_tone=true"])
+    s = _apply_overrides(get_preset("none"), ["skin.smooth=60", "color.auto_tone=true", "background.replace_color=#ffffff"])
     assert s.skin.smooth == 60
+    assert s.background.replace_color == "#ffffff"
     assert s.color.auto_tone is True
     with pytest.raises(SystemExit):
         _apply_overrides(s, ["skin.nope=1"])
