@@ -1,0 +1,123 @@
+"""基本補正: 自動ホワイトバランス・自動トーン・露出/コントラスト/色温度など。"""
+
+from __future__ import annotations
+
+import cv2
+import numpy as np
+
+from ..settings import ColorSettings
+from .ops import blur, luminance, smoothstep
+
+
+def _stats_image(img: np.ndarray, max_side: int = 512) -> np.ndarray:
+    h, w = img.shape[:2]
+    k = min(1.0, max_side / max(h, w))
+    return cv2.resize(img, (max(1, int(w * k)), max(1, int(h * k))), interpolation=cv2.INTER_AREA) if k < 1 else img
+
+
+def auto_white_balance(img: np.ndarray, strength: float = 0.5, skin_mask: np.ndarray | None = None) -> np.ndarray:
+    """Shades-of-Gray 法による自動ホワイトバランス。
+
+    肌が画面の大半を占めると色かぶり推定が寒色側に偏るため、肌領域は統計から除外する。
+    """
+    small = _stats_image(img)
+    px = small.reshape(-1, 3)
+    lum = luminance(small).reshape(-1)
+    valid = (lum > 0.05) & (lum < 0.97)
+    if skin_mask is not None:
+        sm = cv2.resize(skin_mask, (small.shape[1], small.shape[0])).reshape(-1)
+        non_skin = valid & (sm < 0.3)
+        if non_skin.sum() > 0.1 * valid.sum():
+            valid = non_skin
+    if valid.sum() < 100:
+        return img
+    p = 6.0
+    norm = np.power(np.mean(np.power(px[valid], p), axis=0), 1.0 / p)
+    gains = norm.mean() / np.maximum(norm, 1e-4)
+    gains = np.clip(gains, 0.85, 1.2)
+    gains = 1.0 + (gains - 1.0) * strength
+    gains /= gains @ np.array([0.114, 0.587, 0.299])  # 明るさは変えない
+    return img * gains.astype(np.float32)
+
+
+def auto_tone(img: np.ndarray, strength: float = 0.8) -> np.ndarray:
+    """黒点・白点の自動設定と、中間調の明るさ補正。"""
+    lum = luminance(_stats_image(img))
+    lo, hi = np.percentile(lum, [0.5, 99.7])
+    lo = min(lo, 0.12) * strength
+    hi = 1.0 - (1.0 - max(hi, 0.8)) * strength
+    if hi - lo < 0.2:
+        return img
+    out = (img - lo) / (hi - lo)
+    # 中間調: 平均輝度を 0.46 付近へ緩やかに寄せる (ガンマで)
+    mid = float(np.median(np.clip((lum - lo) / (hi - lo), 1e-3, 1)))
+    gamma = np.clip(np.log(0.46) / np.log(max(mid, 1e-3)), 0.7, 1.3)
+    gamma = 1.0 + (gamma - 1.0) * strength * 0.7
+    return np.power(np.clip(out, 0, None), gamma).astype(np.float32)
+
+
+def adjust_tone(img: np.ndarray, s: ColorSettings) -> np.ndarray:
+    if s.exposure:
+        img = img * np.float32(2.0 ** (s.exposure / 50.0))
+
+    if s.highlights or s.shadows:
+        lum = np.clip(luminance(img), 0, 1)
+        # 局所的な明るさを基準にするとハロが出にくい自然なトーン補正になる
+        base = blur(lum, max(img.shape[:2]) * 0.01)
+        w_sh = (1.0 - smoothstep(0.0, 0.55, base)) ** 2
+        w_hl = smoothstep(0.45, 1.0, base) ** 2
+        delta = 0.35 * (s.shadows / 100.0) * w_sh + 0.35 * (s.highlights / 100.0) * w_hl
+        new = np.clip(lum + delta * np.where(delta > 0, 1.0 - lum, lum), 0, 1)
+        ratio = np.clip(new / np.maximum(lum, 1e-3), 0, 4)
+        img = img * ratio[..., None]
+
+    if s.contrast:
+        c = s.contrast / 100.0
+        x = np.clip(img, 0, 1)
+        if c > 0:
+            target = x * x * (3.0 - 2.0 * x)  # S カーブ
+            img = x + (target - x) * c
+        else:
+            img = x + ((0.5 + (x - 0.5) * 0.5) - x) * (-c)
+    return img
+
+
+def adjust_color(img: np.ndarray, s: ColorSettings) -> np.ndarray:
+    if s.temperature or s.tint:
+        t, m = s.temperature / 100.0, s.tint / 100.0
+        gains = np.array([1.0 - 0.15 * t, 1.0 - 0.10 * m, 1.0 + 0.15 * t], np.float32)
+        gains /= gains @ np.array([0.114, 0.587, 0.299], np.float32)
+        img = img * gains
+
+    if s.vibrance or s.saturation:
+        gray = luminance(img)[..., None]
+        chroma = img - gray
+        factor = 1.0 + s.saturation / 100.0
+        if s.vibrance:
+            sat = (img.max(axis=2) - img.min(axis=2))[..., None]
+            factor = factor + (s.vibrance / 100.0) * np.clip(1.0 - sat * 1.5, 0, 1)
+        img = gray + chroma * factor
+    return img
+
+
+def sharpen(img: np.ndarray, amount: float, protect: np.ndarray | None = None) -> np.ndarray:
+    """輝度のアンシャープマスク。protect (0..1) の領域は弱める (肌など)。"""
+    if amount <= 0:
+        return img
+    sigma = max(0.8, min(img.shape[:2]) / 1200.0)
+    lum = luminance(img)
+    detail = lum - cv2.GaussianBlur(lum, (0, 0), sigma)
+    k = (amount / 100.0) * 1.2
+    if protect is not None:
+        k = k * (1.0 - 0.8 * protect)
+    return img + (detail * k)[..., None]
+
+
+def apply(img: np.ndarray, s: ColorSettings, skin_mask: np.ndarray | None = None) -> np.ndarray:
+    if s.auto_white_balance:
+        img = auto_white_balance(img, skin_mask=skin_mask)
+    if s.auto_tone:
+        img = auto_tone(img)
+    img = adjust_tone(img, s)
+    img = adjust_color(img, s)
+    return np.clip(img, 0, 1).astype(np.float32)
