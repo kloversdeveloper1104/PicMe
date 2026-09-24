@@ -106,8 +106,9 @@ class FaceAnalyzer:
     スレッドセーフにするため推論はロックで直列化する。
     """
 
-    def __init__(self, use_ai: bool = True, max_faces: int = 10, download: bool = True):
+    def __init__(self, use_ai: bool = True, max_faces: int = 10, download: bool = True, detect_small_faces: bool = True):
         self._lock = threading.Lock()
+        self.detect_small_faces = detect_small_faces
         self._landmarker = None
         self._segmenter = None
         self.ai_available = False
@@ -175,12 +176,7 @@ class FaceAnalyzer:
 
         with self._lock:
             if self._landmarker is not None:
-                mp_img = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
-                result = self._landmarker.detect(mp_img)
-                for face_lms in result.face_landmarks:
-                    pts = np.array([[p.x * sw, p.y * sh] for p in face_lms], np.float32)
-                    if len(pts) >= 478:
-                        faces.append(Face(pts))
+                faces = self._detect_faces(img, k)
             if self._segmenter is not None:
                 mp_img = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
                 seg = self._segmenter.segment(mp_img)
@@ -205,6 +201,48 @@ class FaceAnalyzer:
         analysis = Analysis(shape=(sh, sw), faces=faces, skin_mask=skin, person_mask=person)
         analysis.skin_mask = self._refine_skin(analysis)
         return analysis.resized((h, w))
+
+    def _landmarks(self, rgb: np.ndarray) -> list[np.ndarray]:
+        h, w = rgb.shape[:2]
+        mp_img = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
+        result = self._landmarker.detect(mp_img)
+        out = []
+        for face_lms in result.face_landmarks:
+            pts = np.array([[p.x * w, p.y * h] for p in face_lms], np.float32)
+            if len(pts) >= 478:
+                out.append(pts)
+        return out
+
+    def _detect_faces(self, img: np.ndarray, k: float) -> list[Face]:
+        """画像全体 + 重なりのあるタイルで顔を検出する (集合写真の小さな顔も拾う)。
+
+        戻り値の座標は解析用に k 倍縮小した画像の座標系。
+        """
+        h, w = img.shape[:2]
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        def run(x0: int, y0: int, x1: int, y1: int) -> list[Face]:
+            tile = rgb[y0:y1, x0:x1]
+            f = min(ANALYSIS_MAX_SIDE, 960 if (x1 - x0) < w else ANALYSIS_MAX_SIDE) / max(tile.shape[:2])
+            f = min(f, 3.0)
+            if abs(f - 1.0) > 1e-3:
+                interp = cv2.INTER_AREA if f < 1 else cv2.INTER_CUBIC
+                tile = cv2.resize(tile, (max(1, round((x1 - x0) * f)), max(1, round((y1 - y0) * f))), interpolation=interp)
+            return [Face((pts / f + np.array([x0, y0], np.float32)) * k) for pts in self._landmarks(tile)]
+
+        faces = run(0, 0, w, h)
+        if self.detect_small_faces:
+            for grid in (2, 3):
+                tw, th = int(w / grid * 1.5), int(h / grid * 1.5)
+                for gy in range(grid):
+                    for gx in range(grid):
+                        x0 = min(max(0, int(gx * w / grid - (tw - w / grid) / 2)), max(0, w - tw))
+                        y0 = min(max(0, int(gy * h / grid - (th - h / grid) / 2)), max(0, h - th))
+                        for cand in run(x0, y0, min(w, x0 + tw), min(h, y0 + th)):
+                            # 既に見つかっている顔と重なるものは捨てる
+                            if all(np.linalg.norm(cand.center - f.center) > 0.4 * max(cand.scale, f.scale) for f in faces):
+                                faces.append(cand)
+        return faces
 
     @staticmethod
     def _refine_skin(a: Analysis) -> np.ndarray:

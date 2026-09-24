@@ -15,27 +15,31 @@ def _stats_image(img: np.ndarray, max_side: int = 512) -> np.ndarray:
     return cv2.resize(img, (max(1, int(w * k)), max(1, int(h * k))), interpolation=cv2.INTER_AREA) if k < 1 else img
 
 
-def auto_white_balance(img: np.ndarray, strength: float = 0.5, skin_mask: np.ndarray | None = None) -> np.ndarray:
-    """Shades-of-Gray 法による自動ホワイトバランス。
+def auto_white_balance(img: np.ndarray, strength: float = 0.8, skin_mask: np.ndarray | None = None) -> np.ndarray:
+    """無彩色に近い画素 (白い壁・シャツ・グレーなど) から色かぶりを推定して補正する。
 
-    肌が画面の大半を占めると色かぶり推定が寒色側に偏るため、肌領域は統計から除外する。
+    画面全体の平均を使う Gray-World 法は、暖色の背景や肌が多い写真で
+    「本来の色」まで打ち消して青白くしてしまうため、元々ほぼ無彩色の
+    画素だけを統計に使う。そうした画素が少ない写真ではほとんど補正しない。
     """
     small = _stats_image(img)
     px = small.reshape(-1, 3)
     lum = luminance(small).reshape(-1)
-    valid = (lum > 0.05) & (lum < 0.97)
+    chroma = (px.max(axis=1) - px.min(axis=1)) / np.maximum(lum, 1e-3)
+    valid = (lum > 0.15) & (lum < 0.95) & (chroma < 0.35)
     if skin_mask is not None:
         sm = cv2.resize(skin_mask, (small.shape[1], small.shape[0])).reshape(-1)
-        non_skin = valid & (sm < 0.3)
-        if non_skin.sum() > 0.1 * valid.sum():
-            valid = non_skin
-    if valid.sum() < 100:
+        valid &= sm < 0.3
+    frac = valid.mean()
+    if frac < 0.01:
         return img
-    p = 6.0
-    norm = np.power(np.mean(np.power(px[valid], p), axis=0), 1.0 / p)
-    gains = norm.mean() / np.maximum(norm, 1e-4)
+    # 無彩色に近いほど重く (かぶりの推定に信頼できる) 、明るい画素ほど重く
+    w = (1.0 - chroma[valid] / 0.35) * lum[valid]
+    mean = (px[valid] * w[:, None]).sum(axis=0) / max(w.sum(), 1e-6)
+    gains = mean.mean() / np.maximum(mean, 1e-4)
     gains = np.clip(gains, 0.85, 1.2)
-    gains = 1.0 + (gains - 1.0) * strength
+    confidence = min(1.0, frac / 0.05)  # 無彩色の画素が少ないときは控えめに
+    gains = 1.0 + (gains - 1.0) * strength * confidence
     gains /= gains @ np.array([0.114, 0.587, 0.299])  # 明るさは変えない
     return img * gains.astype(np.float32)
 

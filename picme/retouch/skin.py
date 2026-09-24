@@ -118,11 +118,13 @@ def even_skin_tone(img: np.ndarray, skin: np.ndarray, scale: float, amount: floa
 
 
 def brighten_skin(img: np.ndarray, skin: np.ndarray, amount: float) -> np.ndarray:
+    """色相・彩度を保ったまま肌を明るくする (白を混ぜると暗い肌色がくすむため)。"""
     if amount <= 0:
         return img
-    k = amount / 100.0 * 0.3
-    lifted = img + (1.0 - img) * k * (0.5 + 0.5 * img)
-    return blend(img, lifted, skin)
+    k = amount / 100.0 * 0.35
+    lum = luminance(img)
+    gain = 1.0 + k * (1.0 - np.clip(lum, 0, 1)) ** 1.5
+    return blend(img, img * gain[..., None], skin)
 
 
 def apply(img: np.ndarray, skin: np.ndarray | None, scale: float, s: SkinSettings) -> np.ndarray:
