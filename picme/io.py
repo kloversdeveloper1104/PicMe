@@ -8,7 +8,35 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 
-SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
+RASTER_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
+HEIF_EXTS = {".heic", ".heif", ".hif"}
+RAW_EXTS = {
+    ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2",
+    ".pef", ".dng", ".3fr", ".iiq", ".erf", ".mef", ".mos", ".x3f", ".srw", ".kdc",
+}
+
+
+def _heif_available() -> bool:
+    try:
+        from pillow_heif import register_heif_opener
+    except ImportError:
+        return False
+    register_heif_opener()
+    return True
+
+
+def _raw_available() -> bool:
+    try:
+        import rawpy  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+# オプションのライブラリが入っている場合だけ HEIC / RAW を扱う
+SUPPORTED_EXTS = RASTER_EXTS | (HEIF_EXTS if _heif_available() else set()) | (RAW_EXTS if _raw_available() else set())
+# 書き出し時に元の拡張子を使えない形式 (JPEG で書き出す)
+READ_ONLY_EXTS = HEIF_EXTS | RAW_EXTS
 
 
 @dataclass
@@ -21,8 +49,28 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTS
 
 
+def _load_raw(path: Path) -> tuple[np.ndarray, ImageMeta]:
+    import rawpy
+
+    with rawpy.imread(str(path)) as raw:
+        rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8, user_flip=None)
+    meta = ImageMeta()
+    try:  # 撮影情報は埋め込みプレビューの EXIF から取れることが多い
+        with Image.open(path) as im:
+            exif = im.getexif()
+            if exif:
+                exif[0x0112] = 1
+                meta.exif = exif.tobytes()
+    except Exception:
+        pass
+    return np.ascontiguousarray(rgb[..., ::-1]), meta
+
+
 def load_image(path: str | Path) -> tuple[np.ndarray, ImageMeta]:
-    """BGR uint8 配列とメタ情報を返す。"""
+    """BGR uint8 配列とメタ情報を返す。RAW は現像 (カメラの WB) してから返す。"""
+    path = Path(path)
+    if path.suffix.lower() in RAW_EXTS:
+        return _load_raw(path)
     with Image.open(path) as im:
         exif = im.getexif()
         im = ImageOps.exif_transpose(im)

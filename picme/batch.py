@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .io import is_image, load_image, save_image
+from .io import READ_ONLY_EXTS, is_image, load_image, save_image
 from .settings import RetouchSettings
 
 log = logging.getLogger(__name__)
@@ -36,7 +36,12 @@ def collect_images(inputs: Iterable[str | Path], recursive: bool = False) -> lis
 
 
 def output_path(src: Path, out_dir: Path, suffix: str = "", fmt: str | None = None) -> Path:
-    ext = f".{fmt.lstrip('.')}" if fmt else src.suffix
+    if fmt:
+        ext = f".{fmt.lstrip('.')}"
+    elif src.suffix.lower() in READ_ONLY_EXTS:
+        ext = ".jpg"  # RAW / HEIC は JPEG で書き出す
+    else:
+        ext = src.suffix
     return out_dir / f"{src.stem}{suffix}{ext}"
 
 

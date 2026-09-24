@@ -61,10 +61,16 @@ def test_auto_white_balance_neutralizes_cast():
 
 
 def test_exposure_brightens():
-    img = np.full((10, 10, 3), 0.3, np.float32)
+    img = np.full((10, 10, 3), 76, np.uint8)
     s = get_preset("none").color
     s.exposure = 50
-    assert color.adjust_tone(img, s).mean() > 0.55
+    assert color.apply(img, s).mean() > 0.55
+
+
+def test_color_curves_identity_when_disabled():
+    img = np.random.default_rng(0).integers(0, 256, (20, 20, 3), dtype=np.uint8)
+    out = color.apply(img, get_preset("none").color)
+    assert np.abs(out * 255 - img).max() < 0.51
 
 
 def test_guided_filter_constant_image():

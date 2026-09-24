@@ -54,6 +54,7 @@ class Analysis:
     faces: list[Face] = field(default_factory=list)
     skin_mask: np.ndarray | None = None  # float32 0..1 (目・眉・唇は除外済み)
     person_mask: np.ndarray | None = None  # float32 0..1 (前景=人物)
+    hair_mask: np.ndarray | None = None  # float32 0..1
 
     @property
     def reference_scale(self) -> float:
@@ -77,6 +78,7 @@ class Analysis:
             faces=[f.scaled(sx, sy) for f in self.faces],
             skin_mask=rs(self.skin_mask),
             person_mask=rs(self.person_mask),
+            hair_mask=rs(self.hair_mask),
         )
 
 
@@ -171,7 +173,7 @@ class FaceAnalyzer:
         sh, sw = small.shape[:2]
 
         faces: list[Face] = []
-        skin = person = None
+        skin = person = hair = None
         rgb = np.ascontiguousarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
 
         with self._lock:
@@ -184,6 +186,7 @@ class FaceAnalyzer:
                 # 0:背景 1:髪 2:体の肌 3:顔の肌 4:服 5:その他(アクセサリー等)
                 if len(conf) >= 4:
                     person = np.clip(1.0 - conf[0], 0, 1)
+                    hair = np.clip(conf[1], 0, 1)
                     skin = np.clip(conf[2] + conf[3], 0, 1)
                     # 自信度の低い領域 (肌色の壁・木材など) を落とし、人物内に限定する
                     t = np.clip((skin - 0.25) / 0.5, 0, 1)
@@ -198,7 +201,7 @@ class FaceAnalyzer:
                     cv2.ellipse(region, (int(c[0]), int(c[1])), (int(r * 0.9), int(r * 1.4)), 0, 0, 360, 1.0, -1)
                 skin *= region
 
-        analysis = Analysis(shape=(sh, sw), faces=faces, skin_mask=skin, person_mask=person)
+        analysis = Analysis(shape=(sh, sw), faces=faces, skin_mask=skin, person_mask=person, hair_mask=hair)
         analysis.skin_mask = self._refine_skin(analysis)
         return analysis.resized((h, w))
 

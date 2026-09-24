@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["PySide6>=6.5"]
+raw = ["rawpy>=0.19"]
+heif = ["pillow-heif>=0.16"]
+all = ["PySide6>=6.5", "rawpy>=0.19", "pillow-heif>=0.16"]
 dev = ["pytest>=7"]
 
 [project.scripts]
